@@ -1,4 +1,7 @@
 *.log
 Main_Input\*
 Main_Output\*
+Analysis Input\*
+Analysis Results\*
 Memory\*
+venv
