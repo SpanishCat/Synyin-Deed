@@ -26,4 +26,3 @@ All output files are generated in Main_Output folder.
 
 # Further Reading
 https://www.sciencedirect.com/science/article/pii/S1055790318303087?casa_token=by3jqQtFBGkAAAAA:3cTVYapeSlpMskMnUAtWrLXgZej8BnTzTVLnqRDD8rQLI_OyPohnS4gVz2NGjmJP5evNGClh3A
-![Syntin Deed Example1]
