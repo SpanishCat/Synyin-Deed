@@ -246,7 +246,7 @@ def convert_genomes_to_genelist2() -> None:
             print("\n\033[4m\033[1m" "Matching unrecognized genes" "\033[0m")
             print(f"Total number of lines: {len(results_txt)}")
 
-            counter_list = list(pool.starmap(func.process_blast_results_line, args_list, 1))
+            counter_list = list(pool.starmap(func.process_blast_results_line, args_list))
             # counter_list = list(itertools.starmap(func.process_blast_results_line, args_list))
 
             counter_list = [x for x in counter_list if x]
@@ -278,56 +278,63 @@ def convert_genomes_to_genelist2() -> None:
 
             # Adjust multiple matches problems ↓ ↓ ↓ ↓ ↓
             # Create 1 list of possible matches
-            cl_subjects = []  # Counter list subjects
-            for item in [x[1] for x in counter_list]:
-                cl_subjects.extend(item)
+            # for item in [x[1] for x in counter_list]:
+            #     cl_subjects.extend(item)
+            cl_counters = []  # Counter list subjects
+            cl_counters.extend([dict for counter in counter_list for dict in counter[1]])
 
             # cl_subjects.extend([x for x in [x[1] for x in counter_list]])
 
-            parallels = [{x: cl_subjects.count(x)} for x in cl_subjects if cl_subjects.count(x) > 1]
+            parallels = [{x: cl_counters.count(x)} for x in cl_counters if cl_counters.count(x) > 1]
 
-            print(f"Counter Keys: {cl_subjects[0:100]}")
+            print(f"Counter Keys: {cl_counters[0:100]}")
 
             if len(parallels) > 0:
                 print(f"Parallels: ({len(parallels)}) | {parallels[0:100]}")
+                parals_more_than_1 = [x for x in parallels if len(x) > 1]
+                print(f"Parallels > 1: ({len(parals_more_than_1)}) | {parals_more_than_1[0:100]}")
 
-            # Add all matches to the list
+            # Add all matches to the list | Fix parallels
             parallels_compare = []
+            to_delete = []
+            temp_list = []
 
-            for num, parallel in enumerate(parallels):
-                print(f"\rFixing parallels: {int((num / len(parallels)) * 100)}%", end="")
-                temp_list = []
+            # for num, parallel in enumerate(parallels):
+            args_list_ = [x for x in enumerate(parallels)]
+            args_list__ = []
+            length = len(parallels)
+            for item in args_list_:
+                args_list__.append((item[0], item[1], length))
+            print(f"args_list__: {args_list__[0:3]}; length: {len(args_list__)}")
 
-                for item in counter_list:
-                    if list(parallel.keys())[0] in item[1].keys() and \
-                       len(item[1]) > 1:  # So that genes won't remain with no match
-                        for dict_item in item[1]:
-                            if list(parallel.keys())[0] == dict_item:
-                                temp_list.append({dict_item: item[1][dict_item]})
+            starmap_results = pool.starmap(func.fix_parallels, args_list__)
+            temp_list_objs, to_delete_objs = [x[0] for x in starmap_results], [x[1] for x in starmap_results]
+            temp_list.extend(temp_list_objs)
+            to_delete.extend(to_delete_objs)
 
-                    elif list(parallel.keys())[0] in item[1].keys():
-                        to_delete = [x for x in item[1] if x == list(parallel.keys())[0]]
-                        # for dict_item in item[1]:
-                        #     if list(parallel.keys())[0] == dict_item:
-                        #         to_delete.append(dict_item)
+            print(f"\n\ntemp_list: {temp_list[0:10]}; objs: {temp_list_objs[0:10]}")
+            print(f"to_delete: {to_delete[0:10]}; objs: {to_delete_objs[0:10]}")
 
-                        # Delete
-                        for x in to_delete:
-                            item[1].pop(x)
+            to_delete = [trash for list_ in to_delete for trash in list_]
+            print(f"To delete: {to_delete[0:8]}")
+            for trash in to_delete:
+                counter_list[int(trash.split('-')[-1])].pop(trash.split('-')[0])
 
-                parallels_compare.append(temp_list)
+            parallels_compare.extend(temp_list)
 
             # Remove duplicates
+            print(f"\n\n\nparallels_compare: {parallels_compare[0:10]}")
             print("\n")
             for num, collection in enumerate(parallels_compare):
                 print(f"\rRemoving duplicates: {int(100 * (num / len(parallels_compare)))}%", end="")
+                # print(f"collection: {collection}")
                 if len(collection) > 0:
-                    collection.sort(reverse=True, key=lambda e: float(list(e.values())[0]))
+                    collection.sort(reverse=True, key=lambda collec: float(list(collec.values())[0]))
+                    # collection.sort(reverse=True, key=lambda e: float(list()[0]))
+                    # collection.sort(reverse=True, key=lambda e: float(e[0]))
                     collection.remove(collection[0])
                 else:
                     parallels_compare.remove(collection)
-
-            # print(f"\n\n\nparallels_compare: {parallels_compare[0:100]}")
 
             for line_num, dicts_counter in enumerate(x[1] for x in counter_list):
                 # print(f"dict_counter: {len(dicts_counter)} | List: {list(dicts_counter)}")
@@ -345,7 +352,7 @@ def convert_genomes_to_genelist2() -> None:
             seq_dicts = [func.start_dict_procs(counter_list)]
             # print(seq_dicts[0].items[0:100])
             seq_dicts.append(dict(zip(seq_dicts[0].values(), seq_dicts[0].keys())))
-            print(f"\n\nGene Dictionary includes: {seq_dicts[0:100]}\n")
+            print(f"\n\nGene Dictionary includes: {seq_dicts[0:20]}\n")
             logging.debug(f"seq_dicts (Gene dictionary): \n{seq_dicts[0:100]}")
 
         # Replace sequence names in GENELIST1 files according to the new data

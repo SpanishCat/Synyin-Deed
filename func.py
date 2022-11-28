@@ -717,6 +717,31 @@ def blast(is_protein=False, evalue=1e-50,
     """
 
 
+def fix_parallels(num, parallel, length) -> tuple:
+    """
+    This function's code runs for every parallel
+    :param parallels_compare:
+    :param to_delete:
+    :param temp_list:
+    :return: temp_list, to_delete
+    """
+    if num % 100 == 0:
+        print(f"\rFixing parallels: {num} ({int((num / length) * 100)}%)", end="")
+
+    # temp_list.clear()
+
+    temp_list_obj = [{dict_item: dic[1][dict_item]} for dic in counter_list for dict_item in dic[1]
+                     if dict_item == list(parallel.keys())[0] and
+                     dic[1][dict_item] > 1]
+
+    # fixme: to_delete isn't working
+    to_delete_obj = [
+        dict_item + f"-{counter_list.index(dic)}" for dic in counter_list for dict_item in dic[1]
+        if dict_item == list(parallel.keys())[0] and
+        dic[1][dict_item] <= 1]
+
+    return temp_list_obj, to_delete_obj
+
 
 def process_blast_results_line(file_line, f_line_num, f_length, memory_dir) -> list | None:
     """
@@ -745,8 +770,8 @@ def process_blast_results_line(file_line, f_line_num, f_length, memory_dir) -> l
             print(f"{file_line.split()[0]} not in counter list")
         already_exists = False
         counter_list.append([str(file_line.split()[0]), Counter()])
-        if "PAU8" not in [x[0] for x in counter_list]:
-            print(f"PAU8 is not in counter list. Line: {f_line_num}")
+        # if "PAU8" not in [x[0] for x in counter_list]:
+        #     print(f"PAU8 is not in counter list. Line: {f_line_num}")
     else:
         if f_line_num < 10:
             print(f"{file_line.split()[0]} already in counter list")
