@@ -14,6 +14,7 @@ Press the number of category of commands that you want to choose. For example: E
 
 
 1. Convert:
+
 ![image](https://user-images.githubusercontent.com/73846269/204307786-125b1b04-93a2-47c3-bad6-d4785434b947.png)
 
 1. GFF3 & FASTA -> GENELIST2: This is the first essential command. A .genelist2 file is a special type of file that you can then apply the SI algorithm to.
