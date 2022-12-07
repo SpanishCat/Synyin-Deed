@@ -1,46 +1,20 @@
-# General
-import os
-import shutil
 import logging
-import time
-import multiprocessing as mp
-from enum import Enum
+from inspect import currentframe
 
-# Sequence comparison
-import subprocess
-from collections import Counter
-
-# Archaic (Intended for deletion)
-from Bio import pairwise2
-from Bio.Seq import *
-from Bio.SeqRecord import SeqRecord
-from datetime import datetime
-
-# Analysis
-import matplotlib.pyplot as plt
-from matplotlib_venn import venn2
-
-
-class Gene:
-    def __init__(self, name, id, start_pos, end_pos, chromosome):
-        self.name = name
-        self.id = id
-        self.start_pos = start_pos
-        self.end_pos = end_pos
-        self.chromosome = chromosome
+from libs_and_dirs import *
 
 
 # Up to user configuration
-# IO
-const_input_dir = r"Main_Input\\"
-const_output_dir = r"Main_Output\\"
-
-anlys_inp_dir = r"Analysis Input\\"
-anlys_op_dir = r"Analysis Results\\"
-anlys_memr_dir = r"Memory\\Analysis\\"
 results_file_name = "SI Results.txt"
+conversion_1_output_format = ".genelist1"
+"""Output format for the GenomeToGenelist conversion, i.e GFF3 to single genelist """
+fasta_formats = ("fasta", "fa", "fna", "ffn", "faa", "frn")
 
-fasta_formats = ["fasta", "fa", "fna", "ffn", "faa", "frn"]
+
+""" Dictionaries Structure:
+    familiar_genes[<Gene Name>] = [<Location in Genome 1>, <Location in Genome 2>]
+    unfamiliar_genes[<Gene Name>] = [<Genome Number (1 / 2)>, <Location in Genome>]
+"""
 files_dict = dict()
 familiar_genes = dict()
 unfamiliar_genes = dict()
@@ -50,31 +24,6 @@ counter_list = []
 class Order(Enum):
     List = 1
     Location = 2
-
-
-# Folder Setup
-if not os.path.exists(const_input_dir):
-    os.makedirs(const_input_dir)
-if not os.path.exists(const_output_dir):
-    os.makedirs(const_output_dir)
-if not os.path.exists(anlys_inp_dir):
-    os.makedirs(anlys_inp_dir)
-if not os.path.exists(anlys_op_dir):
-    os.makedirs(anlys_op_dir)
-if not os.path.exists(anlys_memr_dir):
-    os.makedirs(anlys_memr_dir)
-
-""" Dictionaries Structure:
-    familiar_genes[<Gene Name>] = [<Location in Genome 1>, <Location in Genome 2>]
-    unfamiliar_genes[<Gene Name>] = [<Genome Number (1 / 2)>, <Location in Genome>]
-"""
-
-# GenomeToGenelist
-conversion_1_output_format = ".genelist1"
-"""Output format for the GenomeToGenelist conversion, i.e GFF3 to single genelist """
-
-# GeneIdentifier
-active_files = []
 
 
 # Analysis Functions
@@ -92,119 +41,125 @@ def apply_algorithm(input_dir=anlys_inp_dir, output_dir=anlys_op_dir, acceptable
     Output:
     Synteny Index of the two genomes
 
-    :
-    :param input_dir: Input directory
-    :param output_dir: Output directory
-    :param acceptable_formats: File formats the function accepts. Formats must be lowercase
+    :arg input_dir: Input directory
+    :arg output_dir: Output directory
+    :arg acceptable_formats: File formats the function accepts. Formats must be lowercase
     :return: None
     """
+
+    synteny_indexes_of_genes = []
 
     # Get input
     filename = show_and_get_files(1,
                                   "Choose a genelist2 file to compare using SI:\n",
                                   input_dir_=anlys_inp_dir, acceptable_formats=acceptable_formats)
-    k = int(input("k = ?\n"))
+
+    while True:
+        try:
+            k = int(input("k = ?\n"))
+            break
+        except:
+            print("Invalid Input! k should be a natural number")
 
     # Open file
-    file = open(input_dir + filename, 'r')
-    text = file.read().splitlines()
-    logging.debug("text: " + filename)
+    with open(input_dir + filename, 'r') as inp_file:
+        inp_text = inp_file.read().splitlines()
+    logging.debug(f'Text file: "{filename}"')
 
-    genome_1_name = text[0].split(':')[1].split(',')[0]
-    genome_2_name = text[0].split(':')[2]
+    genome_1_name = inp_text[0].split(':')[1].split(',')[0]
+    genome_2_name = inp_text[0].split(':')[2]
 
-    offset = 1
-    SIs_of_genes = []
+    # Remove comments
+    # todo: Put genome names in ## in genelist2 format
+    inp_text.pop(0)
+    inp_text = [line for line in inp_text if not line.startswith('#')]
 
-    # Check for comments
-    text.remove(text[0])
-    for line in text:
-        if line.startswith('#'):
-            text.remove(line)
-
-    def make_nbrhood(gene: tuple, nbrhood_num: int, gene_num: int):
+    # fixme: every neighborhood has a different length
+    def make_nbrhood(center_gene: Allele, nbrhood_num: int) -> list:
         """
-        Create neighborhood
-        :param gene: [<Gene name>, <1st neighborhood location>, <2nd neighborhood location>].
-        :param nbrhood_num: 1 / 2. Number of neighborhood. 1: Left in genelist, 2: Right in genelist.
-        :param gene_num: The place in genelist of the gene for which the neighborhood is being created.
-        :return: None
+        Create neighborhood for given gene.
+
+        :param center_gene: The gene around which the neighborhood is built. center_gene = [<gene name>, <location in neighborhood 1>, <location in neighborhood 2>].
+        :param nbrhood_num: 1 or 2. Number of neighborhood. 1: Left in genelist, 2: Right in genelist.
+        :return: Neighborhood.
         """
-        nbrhood = neighborhoods[nbrhood_num - 1]
 
-        # logging.debug("Gene: " + gene[0])
+        center_gene_num = center_gene.locations[nbrhood_num]   # Just for readability
+        logging.debug(f"Center Gene: {center_gene.name} ({center_gene_num})\n\n")
 
-        # Add genes:
-        line_num = 1
-        # Find neighbors
-        for line in text:
-            #     if line.split()[1] == "X":
-            #         nbrhood_num = 2
-            #     else:
-            #         nbrhood_num = 1
-            if line.split()[nbrhood_num] != "X":
-                # Direct Neighbors (e.g 2 and 3 in [1,2,3,4,5])
-                if (gene_num - k <= int(line.split()[nbrhood_num]) <= gene_num + k or
-                    # Cyclical Neighbors (e.g 1 and 5 in [1,2,3,4,5])
-                    gene_num + k - len(text) >= int(line.split()[nbrhood_num]) or
-                        gene_num - k + len(text) <= int(line.split()[nbrhood_num])):
-                    nbrhood.append(line.split()[0])
-                line_num += 1
+        # Set neighborhood
+        nbrhood = [line.split()[0] for line in inp_text if
+                   # 1. If gene is homozygous (exists in both genomes)
+                   line.split()[nbrhood_num] != "X" and
 
-        if nbrhood.__contains__(gene_in_check[0]):
-            nbrhood.remove(gene_in_check[0])
-        # logging.debug("Neighborhood of gene " + gene[0] + " in genome " + str(nbrhood_num) + ": " + str(nbrhood))
+                   # 2. If gene is either a:
+                   # - Direct Neighbor (e.g 2 and 3 in [1,2,3,4,5])
+                   (center_gene_num - k <= int(line.split()[nbrhood_num]) <= center_gene_num + k or
+                    # - Cyclical Neighbor (e.g 1 and 5 in [1,2,3,4,5])
+                    center_gene_num + k - len(inp_text) >= int(line.split()[nbrhood_num]) or
+                    center_gene_num - k + len(inp_text) <= int(line.split()[nbrhood_num]))
+                   ]
 
-    # Compare genomes with synteny
-    for current_gene_num in range(0, len(text)):
-        print(f"\r{int(100 * ((current_gene_num + 1) / len(text)))}%", end="")
+        for line in inp_text:
+            try:
+                logging.debug(f"\n\n\n{line.split()[0]}:\n line.split()[{nbrhood_num}] != 'X': {line.split()[nbrhood_num] != 'X'}")
+                logging.debug(f"{center_gene_num} - k({k}) <= int(line.split()[{nbrhood_num}]) <= {center_gene_num} + k({k}): {(center_gene_num - k <= int(line.split()[nbrhood_num]) <= center_gene_num + k)}")
+                logging.debug(f"{center_gene_num} + k({k}) - {len(inp_text)} >= int(line.split()[{nbrhood_num}]): {center_gene_num + k - len(inp_text) >= int(line.split()[nbrhood_num])}")
+                logging.debug(f"{center_gene_num} - k({k}) + {len(inp_text)} <= int(line.split()[{nbrhood_num}]): {center_gene_num - k + len(inp_text) <= int(line.split()[nbrhood_num])}")
 
-        if "*" in text[current_gene_num]:
-            continue
+            except: pass
 
-        # print(f"line: {text[current_gene_num]}")
-        # if text[current_gene_num].startswith("*"):
-        #     continue
+        if center_gene.name in nbrhood:
+            nbrhood.remove(center_gene.name)
 
-        gene_in_check = (text[current_gene_num].split()[0],
-                         text[current_gene_num].split()[1],
-                         text[current_gene_num].split()[2])
-        neighborhoods = [[], []]
+        # logging.debug(f"\nnbrhood: " + str(nbrhood).replace("',", f"': {}").replace(', ', ',\n'))
+        logging.debug(f"\n\nNeighborhood {nbrhood_num}: ")
+        for i, gene in enumerate(nbrhood):
+            logging.debug(f"{gene}: {i+1}")
+        return nbrhood
 
-        # Create neighborhoods for selected gene
-        make_nbrhood(gene_in_check, 1, int(gene_in_check[1]))
-        make_nbrhood(gene_in_check, 2, int(gene_in_check[2]))
+    # Apply SI to each gene
+    text_no_asterisks = [line for line in inp_text if "*" not in line]
+    try:
+        for line_num, current_gene_line in enumerate(text_no_asterisks):
+            if line_num % 100 == 0:
+                print(f"\r{int(100 * ((line_num + 1) / len(text_no_asterisks)))}%", end="")
 
-        # Find common genes
-        intersection = []
-        for gene_num, gene in enumerate(neighborhoods[0]):
-            # print(f"\rgene number: {gene_num}", end="")
-            if (neighborhoods[1].__contains__(gene) and not gene.startswith("*")) or \
-               (neighborhoods[1][gene_num].startswith("*") and gene.startswith("*")):
-                intersection.append(gene)
-        # logging.debug("Intersection: " + str(intersection))
+            # Define current gene
+            gene_in_check = Allele(current_gene_line.split()[0],  # Name
+                                   (current_gene_line.split()[1],  # Location in genome 1
+                                   current_gene_line.split()[2]))  # Location in genome 2
 
-        # SI formula
-        x = (1 / (k * 2)) * len(intersection)
-        SIs_of_genes.append(x)
-        logging.debug("\nSI for gene " + gene_in_check[0] + ": " + str(x) + "\n")
-        print("\nSI for gene " + gene_in_check[0] + ": " + str(x) + "\n")
+            # Create neighborhoods for current gene
+            neighborhoods = [None, make_nbrhood(gene_in_check, 1), make_nbrhood(gene_in_check, 2)]
+            if line_num % 1000:
+                logging.debug(f"Neighborhoods for gene {gene_in_check}:\n"
+                              f"Neighborhood 1: {neighborhoods[1]}\n Neighborhood 2: {neighborhoods[2]}")
 
-    # Average out SIs to find genome's SI
-    sum = 0
-    for sindex in SIs_of_genes:
-        sum += float(sindex)
-        logging.debug(f"sum = {str(sum)}")
+            # Find common genes
+            intersection = []
+            for gene_1, gene_2 in zip(neighborhoods[1], neighborhoods[2], strict=True):
+                print(f"Gene: {gene_1}; {len(neighborhoods[1])} == {len(neighborhoods[2])}")
+                if (gene_1 in neighborhoods[2] and not gene_1.startswith("*")) or \
+                   gene_1.startswith("*") and (gene_2.startswith("*")):
+                    intersection.append(gene_1)
+            logging.debug("Intersection: " + str(intersection))
 
-    if len(SIs_of_genes) > 0:
-        SI_of_genome = sum / len(SIs_of_genes)
+            # SI formula
+            x = (1 / (k * 2)) * len(intersection)
+            synteny_indexes_of_genes.append(x)
+            logging.debug(f"\nSI for gene {gene_in_check.name}: {x}\n")
+
+    except ValueError:
+        raise Exception(f"Neighborhoods are of different lengths ({len(neighborhoods[1])}, {len(neighborhoods[2])})")
+
+    # Average out gene SI's to find genome's SI
+    if len(synteny_indexes_of_genes) > 0:
+        synteny_index_of_genome = sum(synteny_indexes_of_genes) / len(synteny_indexes_of_genes)
     else:
-        SI_of_genome = None
+        synteny_index_of_genome = None
         print("\nERROR: No recognized genes found. SI is NONE")
-        # raise IOError("No recognized genes in genelist!")
-    print(f"SI for genomes {genome_1_name} and {genome_2_name} = {SI_of_genome}\n")
-
-    file.close()
+    print(f"SI for genomes {genome_1_name} and {genome_2_name} = {synteny_index_of_genome}\n")
 
     # Write results in results file
     if not os.path.exists(output_dir + results_file_name):
@@ -214,31 +169,40 @@ def apply_algorithm(input_dir=anlys_inp_dir, output_dir=anlys_op_dir, acceptable
         results_file.write("\n\n")
 
     results_file.write("Comparison results for genomes " + genome_1_name + " and " + genome_2_name + ": " +
-                       "SI = " + str(SI_of_genome))
+                       "SI = " + str(synteny_index_of_genome))
+    results_file.close()
 
 
-# Find GFF3 and Fasta in specified directory
 def find_genome(dir):
-    for path, dirs, files in os.walk(dir):
-        for filename in files:
-            file = open(dir + filename, 'r')
-            text = file.read().splitlines()
+    """
+    Find GFF3 and Fasta in specified directory
+    :param dir:
+    :return:
+    """
+    gff3, fasta = None, None
+    for filename in [file for (path, dirs, files) in os.walk(dir) for file in files]:
 
-            if text[0] == "##gff-version 3":
+        if filename.split('.')[-1].lower() in fasta_formats:
+            fasta = filename
+            continue
+
+        else:
+            with open(dir + filename, 'r') as file:
+                text = file.readlines()
+
+            if text[0] == "##gff-version 3\n":
                 gff3 = filename
                 continue
 
-            elif fasta_formats.__contains__(filename.split('.')[-1].lower()):
-                fasta = filename
-                continue
+        if gff3 and fasta: break
+
     return gff3, fasta
 
 
 def create_genelist1(text_name, gene_type="Name", input_dir=const_input_dir, output_dir=const_output_dir, order=Order.Location):
-
     """
     Yes INDEED
-    :param order: "List"/"Location".
+    :param order: Order.Location/Order.List.
     List: number the genes according to location in genelist, e.g:
     PAU8 1 1
     YAL067W-A 1 2
@@ -263,7 +227,6 @@ def create_genelist1(text_name, gene_type="Name", input_dir=const_input_dir, out
         output_file = open(output_dir + text_name.removesuffix("." + text_name.split(".")[-1]) + conversion_1_output_format, 'w')
 
         # Read data file
-        gene_num = 1
         for line in input_text:
             # Chromosomes
             if len(line.split()) >= 8 and line.split()[2] == "region":
@@ -275,40 +238,38 @@ def create_genelist1(text_name, gene_type="Name", input_dir=const_input_dir, out
 
             # Setup Gene
             if len(line.split()) >= 8 and line.split()[2] == "gene":
-                this_gene = Gene("", "", 0, 0, "")
+                this_gene = Gene("", "", 0, 0)
                 this_gene.name = line[line.find(";Name=") + 6:(line.find(";", line.find(";Name=") + 6, line.find("\n")))]
                 this_gene.id = line[line.find("ID=") + 3:(line.find(";", line.find("ID=") + 3, line.find("\n")))]
                 # this_gene.position = gene_num
                 this_gene.start_pos = int(line.split()[3])
-                this_gene.chromosome = chr
 
                 genes.append(this_gene)
-                gene_num += 1
 
-            logging.debug("Genes: " + str(len(genes)))
+            # logging.debug("Genes: " + str(len(genes)))
 
         # Upon finishing:
-        i = 1
-        logging.debug("Chromosomes in genome: " + str(chromosomes))
+        # i = 1
+        # logging.debug("Chromosomes in genome: " + str(chromosomes))
 
         if order == Order.List:
             if gene_type == "Name":
-                for gene in genes:
-                    output_file.write(f"{gene.name} {i}\n")
-                    i += 1
+                for num, gene in enumerate(genes):
+                    output_file.write(f"{gene.name} {num}\n")
+                    # i += 1
 
             elif gene_type == "ID":
-                for gene in genes:
-                    output_file.write(f"{gene.id} {i} \n")
-                    i += 1
+                for num, gene in enumerate(genes):
+                    output_file.write(f"{gene.id} {num} \n")
+                    # i += 1
 
         elif order == Order.Location:
             if gene_type == "Name":
-                for gene in genes:
+                for num, gene in enumerate(genes):
                     output_file.write(f"{gene.name} {gene.start_pos}\n")
 
             elif gene_type == "ID":
-                for gene in genes:
+                for num, gene in enumerate(genes):
                     output_file.write(f"{gene.id} {gene.start_pos} \n")
 
         output_file.close()
@@ -343,64 +304,112 @@ def merge_genelist(filename_1, filename_2, input_dir=const_input_dir, output_dir
     unfamiliar_genes_file = open(output_dir + "Unfamiliar Genes.genelist2", 'w')
     unfamiliar_genes_txt = ""
 
-    output_txt += f"1:{genelist_name_1}, 2:{genelist_name_2}\n"
-    processed = 0
-    seqs = []
+    output_txt += f"##Genomes: {genelist_name_1} {genelist_name_2}\n"
+    # processed = 0
+    seqs: list = []
     wrong_asters = 0
 
     if not asterisks:
-        for line_1 in text_1:
-            genename_1 = line_1.split()[0]
-            logging.debug("Processing gene " + genename_1)
-            is_allele = False
+        # for line_num, line_1 in enumerate(text_1):
+        #     genename_1 = line_1.split()[0]
+        #     logging.debug("Processing gene " + genename_1)
+        #     is_homozygous = False
+        #
+        #     for line_2 in text_2:
+        #         if f"{genename_1} " in line_2:
+        #
+        #             familiar_genes[genename_1] = [line_1.split()[1], line_2.split()[1]]
+        #             is_homozygous = True
+        #             break
+        #
+        #     # Check Unidentified Genes from Genome 1
+        #     if not is_homozygous:
+        #         unfamiliar_genes[genename_1] = [1, line_1.split()[1]]
+        #
+        #     # processed += 1
+        #     print("\rProcessing " + str(int(line_num / len(text_1) * 100)) + "%", end="")
 
-            for line_2 in text_2:
-                if f"{genename_1} " in line_2:
+        unfamiliar_genes: dict = {line_1.split()[0]: [1, line_1.split()[1]] for line_1 in text_1
+                                  if f"{line_1.split()[0]} " not in text_2}
 
-                    familiar_genes[genename_1] = [line_1.split()[1], line_2.split()[1]]
-                    is_allele = True
-                    break
+        familiar_genes: dict = {line_1.split()[0]: [line_1.split()[1],
+                                [line_2 for line_2 in text_2
+                                if f"{line_1.split()[0]} " in line_2][0]]
 
-            # Check Unidentified Genes from Genome 1
-            if not is_allele:
-                unfamiliar_genes[genename_1] = [1, line_1.split()[1]]
+                                for line_1 in text_1 if f"{line_1.split()[0]} " in text_2
+                                }
 
-            processed += 1
-            print("\rProcessing " + str(int(processed / len(text_1) * 100)) + "%", end="")
+    # If asterisks:
+    else:
+        familiar_genes: dict = {line_1.split()[0]: [line_1.split()[1],
+                                [line_2 for line_2 in text_2
+                                if f"{line_1.split()[0]} " in line_2][0]]
 
-    elif asterisks:
-        for line_1 in text_1:
-            genename_1 = line_1.split()[0]
-            logging.debug("Processing gene " + genename_1)
+                                for line_1 in text_1 if f"{line_1.split()[0]} " in text_2}
 
-            for line_2 in text_2:
-                if f"{genename_1} " in line_2:
+        print('Non-asterisks 1: ' + str([(line_1.split()[0], line_1.split()[1], [line_2 for line_2 in text_2
+              if f"{line_1.split()[0]} " in line_2][0])
 
-                    familiar_genes[genename_1] = [line_1.split()[1], line_2.split()[1]]
-                    seqs.append((genename_1, line_1.split()[1], line_2.split()[1]))
-                    break
+             for line_1 in text_1 if f"{line_1.split()[0]} " in text_2]))
 
-            # Check Unidentified Genes from Genome 1
-            else:
-                seqs.append((f"*{genename_1}", line_1.split()[1], "X"))
-                if "|" in genename_1:
-                    print(f"Wrong asterisk1: {genename_1}")
-                    wrong_asters += 1
+        seqs = [
+            # Matched genes
+            *[(line_1.split()[0], line_1.split()[1], [line_2 for line_2 in text_2
+              if f"{line_1.split()[0]} " in line_2][0])
 
-            processed += 1
-            print("\rProcessing " + str(int(processed / len(text_1) * 100)) + "%", end="")
+             for line_1 in text_1 if f"{line_1.split()[0]} " in text_2],
+
+            # Unmatched genes
+            # Genome 1
+            *[(f"*{line_1.split()[0]}", line_1.split()[1], "X") for line_1 in text_1
+            if line_1.split()[0] not in text_2],
+            # Genome 2
+            *[(f"*{line_2.split()[0]}", "X", line_2.split()[1]) for line_2 in text_2
+             if line_2.split()[0] not in text_1]
+        ]
+
+        print(f"Non-asterisks: {[x for x in seqs if not '*' in x[0]]}")
+        wrong_asters = len([aster for aster in seqs if '*' in aster[0] and '|' in aster[0]])
+
+        # # Add unmatched genes
+        # seqs.append((f"*{line_1.split()[0]}", line_1.split()[1], "X") for line_1 in text_1
+        #             if line_1.split()[0] not in text_2)
+        # seqs.append((f"*{line_2.split()[0]}", "X", line_2.split()[1]) for line_2 in text_2
+        #             if line_2.split()[0] not in text_1)
+
+
+        # for line_1 in text_1:
+        #     genename_1 = line_1.split()[0]
+        #     logging.debug("Processing gene " + genename_1)
+        #
+        #     for line_2 in text_2:
+        #         if f"{genename_1} " in line_2:
+        #
+        #             familiar_genes[genename_1] = [line_1.split()[1], line_2.split()[1]]
+        #             seqs.append((genename_1, line_1.split()[1], line_2.split()[1]))
+        #             break
+        #
+        # # Check Unidentified Genes from Genome 1
+        # else:
+        #     seqs.append((f"*{genename_1}", line_1.split()[1], "X"))
+        #     if "|" in genename_1:
+        #         print(f"Wrong asterisk1: {genename_1}")
+        #         wrong_asters += 1
+        #
+        # processed += 1
+        # print("\rProcessing " + str(int(processed / len(text_1) * 100)) + "%", end="")
 
     # Check Unidentified Genes from Genome 2
-    for line_2 in text_2:
-        genename_2 = line_2.split()[0]
-        if not asterisks and genename_2 not in unfamiliar_genes and genename_2 not in familiar_genes:
-            unfamiliar_genes[genename_2] = [2, line_2.split()[1]]
-
-        if asterisks and genename_2 not in [x[0] for x in seqs]:
-            seqs.append((f"*{genename_2}", "X", line_2.split()[1]))
-            if "|" in genename_2:
-                print(f"Wrong asterisk2: {genename_2}")
-                wrong_asters += 1
+    # for line_2 in text_2:
+    #     genename_2 = line_2.split()[0]
+    #     if not asterisks and genename_2 not in unfamiliar_genes and genename_2 not in familiar_genes:
+    #         unfamiliar_genes[genename_2] = [2, line_2.split()[1]]
+    #
+    #     if asterisks and genename_2 not in [x[0] for x in seqs]:
+    #         seqs.append((f"*{genename_2}", "X", line_2.split()[1]))
+    #         if "|" in genename_2:
+    #             print(f"Wrong asterisk2: {genename_2}")
+    #             wrong_asters += 1
 
     if not asterisks:
         output_txt += str(familiar_genes) \
@@ -456,7 +465,7 @@ def merge_genelist(filename_1, filename_2, input_dir=const_input_dir, output_dir
 
 # "FastaSeperatorByGene" Definitions
 def separate_by_gene(gff3, fasta, genelist_output_format=".genelist1", output_filename="", output_format=".fasta",
-                     one_outp_file=True, specific_genes_only=False, specific_genes=[],
+                     one_outp_file=True, specific_genes_only=False, specific_genes=(),
                      input_dir=const_input_dir, output_dir=const_output_dir,
                      memory_dir=r"Memory\\DefaultTemp\\"):
 
@@ -477,8 +486,6 @@ def separate_by_gene(gff3, fasta, genelist_output_format=".genelist1", output_fi
     :return:
     """
 
-    unallowed_filenames = ["con", "com", "prn", "aux", "nul", "lpt"]
-
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
@@ -496,7 +503,7 @@ def separate_by_gene(gff3, fasta, genelist_output_format=".genelist1", output_fi
                 if text_name.split(".")[-1].lower() == "gff3":
                     # Create Gene
                     if len(line.split()) >= 8 and line.split()[2] == "gene":
-                        this_gene = Gene("", "", 0, 0, "")
+                        this_gene = Gene("", "", 0, 0)
 
                         # Write Gene Data
                         this_gene.name = line[line.find(";Name=") + 6:
@@ -547,7 +554,7 @@ def separate_by_gene(gff3, fasta, genelist_output_format=".genelist1", output_fi
                 os.remove(output_dir + file)
 
         for line in genelist_text:
-            this_gene = Gene(line.split()[0], None, int(line.split()[1]), int(line.split()[2]), None)
+            this_gene = Gene(line.split()[0], None, int(line.split()[1]), int(line.split()[2]))
 
             # In case windows can't handle the file name
             try:
@@ -594,7 +601,7 @@ def separate_by_gene(gff3, fasta, genelist_output_format=".genelist1", output_fi
 
         # Write sequence
         for line in genelist_text:
-            this_gene = Gene(line.split()[0], None, int(line.split()[1]), int(line.split()[2]), None)
+            this_gene = Gene(line.split()[0], None, int(line.split()[1]), int(line.split()[2]))
             outp_txt += f">{this_gene.name}\n" \
                         f"{inp_fa_text[this_gene.start_pos:this_gene.end_pos]}\n"
 
@@ -673,13 +680,13 @@ def blast(is_protein=False, evalue=1e-50,
 
     # Create database (CMD)
     if is_protein:
-        print(subprocess.run(["makeblastdb",
+        print(subproc_run(["makeblastdb",
                               "-in", "Genome1.fasta",
                               "-out", "Genome1",
                               "-dbtype", "prot"],
                              text=True, shell=True, cwd=path))
     else:
-        print(subprocess.run(["makeblastdb",
+        print(subproc_run(["makeblastdb",
                               "-in", "Genome1.fasta",
                               "-out", "Genome1",
                               "-dbtype", "nucl"],
@@ -687,7 +694,7 @@ def blast(is_protein=False, evalue=1e-50,
 
     # Align (CMD)
     if is_protein:
-        print(subprocess.run(["blastp",
+        print(subproc_run(["blastp",
                               "-db", "Genome1",
                               "-query", "Genome2.fasta",
                               "-out", "results.txt",
@@ -695,7 +702,7 @@ def blast(is_protein=False, evalue=1e-50,
                               "-evalue", str(evalue)],
                              text=True, shell=True, cwd=path))
     else:
-        print(subprocess.run(["blastn",
+        print(subproc_run(["blastn",
                               "-db", "Genome1",
                               "-query", "Genome2.fasta",
                               "-out", "results.txt",
@@ -720,25 +727,18 @@ def blast(is_protein=False, evalue=1e-50,
 def fix_parallels(num, parallel, length) -> tuple:
     """
     This function's code runs for every parallel
-    :param parallels_compare:
-    :param to_delete:
-    :param temp_list:
     :return: temp_list, to_delete
     """
-    if num % 100 == 0:
+    if mp.current_process().name.split('-')[-1] == '1' and num % 3 == 0:
         print(f"\rFixing parallels: {num} ({int((num / length) * 100)}%)", end="")
 
-    # temp_list.clear()
-
     temp_list_obj = [{dict_item: dic[1][dict_item]} for dic in counter_list for dict_item in dic[1]
-                     if dict_item == list(parallel.keys())[0] and
-                     dic[1][dict_item] > 1]
+                     if dic[1][dict_item] > 1 and dict_item == list(parallel.keys())[0]]
 
     # fixme: to_delete isn't working
     to_delete_obj = [
-        dict_item + f"-{counter_list.index(dic)}" for dic in counter_list for dict_item in dic[1]
-        if dict_item == list(parallel.keys())[0] and
-        dic[1][dict_item] <= 1]
+        f"{dict_item}-{counter_list.index(dic)}" for dic in counter_list for dict_item in dic[1]
+        if dic[1][dict_item] <= 1 and dict_item == list(parallel.keys())[0]]
 
     return temp_list_obj, to_delete_obj
 
@@ -803,9 +803,10 @@ def process_blast_results_line(file_line, f_line_num, f_length, memory_dir) -> l
 
         # return counter_list
 
-    print(f"\rLines processed: {f_line_num} ({int(100 * ((f_line_num + 1) / f_length))}%),"
-          f" genes matched: {len(counter_list)}",
-          end="")
+    if mp.current_process().name.split('-')[-1] == '1':
+        print(f"\rLines processed: {f_line_num} ({int(100 * ((f_line_num + 1) / f_length))}%),"
+              f" genes matched: {len(counter_list)}",
+              end="")
     # return counter_list[f_line_num]
 
     for item in counter_list:
@@ -813,43 +814,43 @@ def process_blast_results_line(file_line, f_line_num, f_length, memory_dir) -> l
             return item
 
 
-def blast_results_to_dict(input_dir="Memory\\blast\\bin\\", max_threads=os.cpu_count()):
-    # proc = mp.Process()
-    # Matching
-    results_file = open(input_dir + "results.txt", 'r')
-    results_txt = results_file.readlines()
+# def blast_results_to_dict(input_dir="Memory\\blast\\bin\\", max_threads=os.cpu_count()):
+#     # proc = mp.Process()
+#     # Matching
+#     results_file = open(input_dir + "results.txt", 'r')
+#     results_txt = results_file.readlines()
+#
+#     lines = []
+#     counter_list = []
+#     procs = []
+#
+#     def match_unrecognized_seqs(line, line_num):
+#         for item in counter_list:
+#             if item[0] == line.split()[0]:
+#                 break
+#         else:
+#             counter_list.append([str(line.split()[0]), Counter()])
+#             # print(str(line.split()[0] + " does not exist. Adding it to the list"))
+#
+#         for item in counter_list:
+#             if item[0] == line.split()[0]:
+#                 item[1][line.split()[1]] += float(line.split()[11])
+#
+#             print("\rLines processed: " + str(line_num) + " (" + str(int(100 * ((line_num + 1) / len(results_txt)))) +
+#                   "%), genes matched: " + str(len(counter_list)), end="")
+#     # return lines
+#
+#     for line_num, line in enumerate(results_txt):
+#         lines.append((line, line_num))
+#     print("For loop 1 done")
+#
+#     # for i in range(max_threads):
+#         # procs.append(mp.Process(target=match_unrecognized_seqs, args=(lines[i])))
+#     print("For loop 2 done")
+#     return procs, counter_list
 
-    lines = []
-    counter_list = []
-    procs = []
 
-    def match_unrecognized_seqs(line, line_num):
-        for item in counter_list:
-            if item[0] == line.split()[0]:
-                break
-        else:
-            counter_list.append([str(line.split()[0]), Counter()])
-            # print(str(line.split()[0] + " does not exist. Adding it to the list"))
-
-        for item in counter_list:
-            if item[0] == line.split()[0]:
-                item[1][line.split()[1]] += float(line.split()[11])
-
-            print("\rLines processed: " + str(line_num) + " (" + str(int(100 * ((line_num + 1) / len(results_txt)))) +
-                  "%), genes matched: " + str(len(counter_list)), end="")
-    # return lines
-
-    for line_num, line in enumerate(results_txt):
-        lines.append((line, line_num))
-    print("For loop 1 done")
-
-    for i in range(max_threads):
-        procs.append(mp.Process(target=match_unrecognized_seqs, args=(lines[i])))
-    print("For loop 2 done")
-    return procs, counter_list
-
-
-def start_dict_procs(counter_list, input_dir="Memory\\blast\\bin\\"):
+def make_gene_dict(counter_list):
     """ Counter List:
         :List = [[<query gene 1>, <Counter>],[<query gene 2>, <Counter>],[<query gene 3>, <Counter>]...]
         :Counter = [<target gene 1>, <target gene 2>, <target gene 3>...]
@@ -862,15 +863,15 @@ def start_dict_procs(counter_list, input_dir="Memory\\blast\\bin\\"):
 
     # input_dir = "C:\\Users\\Yoni\\PycharmProjects\\pythonProject\\Memory\\blast\\bin\\"
 
-    print(f"\n\n\nCounter list from start_dict_procs: {len(counter_list)}")
+    print(f"\n\n\nCounter list from make_gene_dict: {len(counter_list)}")
 
     # Matching
-    results_file = open(input_dir + "results.txt", 'r')
-    results_txt = results_file.readlines()
+    # results_file = open(input_dir + "results.txt", 'r')
+    # results_txt = results_file.readlines()
 
     # counter_list = list()
     gene_dict = dict()
-    proc = mp.Process()
+    # proc = mp.Process()
 
     # for line in results_txt:
 
@@ -879,308 +880,308 @@ def start_dict_procs(counter_list, input_dir="Memory\\blast\\bin\\"):
 
     for item in [x for x in counter_list if len(x[1]) > 0]:
         gene_dict[item[0]] = item[1].most_common(1)[0][0]
-    logging.debug("\n" + str(gene_dict))
+    logging.debug("\nGene dictionary: " + str(gene_dict))
 
-    results_file.close()
+    # results_file.close()
     return gene_dict
 
 
 # "GeneIdentifier" Definitions
-def identify_genes(input_dir=r"MainInput\\", output_dir=r"MainOutput\\", temp_dir=r"Memory\\DefaultTemp\\",
-                   memory_dir=r"Memory\\DefaultTemp\\GeneLib\\", threshold=0.7,
-                   algorithm_type="Pairwise2-ScoreOnly", seq_len_max_difference=15,
-                   temp_list_filename="percentages.txt", temp_list_format="Normal"):
-
-    genes_list = list()
-
-    """
-    - results_str: Results of matching between sequence in check and every other sequence in
-    memory. From that string the program decides later which of the matches is the best one and assigns it.
-    - final_results_str: Best matches list of every sequence inputted.
-    """
-
-    def open_gene_files(dir):
-        # Open all genes that are stored in memory and prepare them for matching
-        for paths, dirs, files in os.walk(dir):
-            for file in files:
-                if file.split('.')[1].lower() == "fasta":
-                    print("Opening file: " + file)
-                    gene_seq = open(dir + file, 'r')
-                    genes_list.append(SeqRecord(Seq(gene_seq.read()), name=file))
-                    # genes_dict[Seq(gene_seq.read())] = file
-                    gene_seq.close()
-
-    def apply_sbm_algorithm(input_gene_seq, memory_gene_seq, memory_gene_name, results_str_=""):
-        # Match given sequence (input_gene_seq) to a sequence from memory (memory_gene_sequence)
-        # using a Sequence Based Method.
-
-        """
-        Algorithm Types (algorithm_type):
-        - Hamming: Hamming Distance
-        - Pairwise2: Pairwise2 algorithm from Biopython library.
-        - Pairwise2-ScoreOnly: Pairwise2 algorithm from Biopython library. score_only set to True (shorter runtime).
-        """
-
-        if algorithm_type == "Hamming":
-            mutations = 0
-
-            length = min(len(input_gene_seq), len(memory_gene_seq))
-
-            for i in range(0, length):
-                char1 = input_gene_seq[i]
-                char2 = memory_gene_seq[i]
-
-                if not char2.lower() == char1.lower():
-                    mutations += 1
-
-            hum_dist = mutations / length
-
-            # Save Results in Temp Memory
-            results_str_ += memory_gene_name.split('\\')[-1] + " " + str(mutations) + "/" + str(length) + " " + str(hum_dist) + "\n"
-
-        elif algorithm_type == "Pairwise2":
-            seq1 = Seq(input_gene_seq)
-            seq2 = Seq(memory_gene_seq)
-
-            matches = pairwise2.align.globalxx(seq1, seq2, score_only=False)
-            logging.debug("Match results for gene " + memory_gene_name + ": " +
-                          str(matches[0][2] / (matches[0][4] - matches[0][3])))
-
-            # Save Results in Temp Memory
-            if temp_list_format == "Normal":
-                results_str_ += memory_gene_name.split('\\')[-1] + " " + str(matches[0][2]) + "/" + \
-                                str(matches[0][4] - matches[0][3]) + " " + \
-                                str(matches[0][2] / (matches[0][4] - matches[0][3])) + "\n"
-            elif temp_list_format == "PercentageOnly":
-                results_str_ += str(matches[0][2] / (matches[0][4] - matches[0][3])) + "\n"
-
-        elif algorithm_type == "Pairwise2-ScoreOnly":
-            seq1 = Seq(input_gene_seq)
-            seq2 = Seq(memory_gene_seq)
-            bigger_seq = max(len(seq1), len(seq2))
-
-            # Apply algorithm
-            matches = pairwise2.align.globalxx(seq1, seq2, score_only=True)
-            logging.debug("Match results for gene " + memory_gene_name + ": " +
-                          str(matches / bigger_seq))
-
-            # Save Results in Temp Memory
-            if temp_list_format == "Normal":
-                results_str_ += memory_gene_name.split('\\')[-1] + " " + str(matches) + "/" + \
-                                str(bigger_seq) + " " + str(matches / bigger_seq) + "\n"
-            elif temp_list_format == "PercentageOnly":
-                results_str_ += str(matches / bigger_seq) + "\n"
-
-        return results_str_
-
-    def check_gene_in_memory(input_gene_file__):
-        # Match given gene (input_gene_file__) to all genes stored in memory.
-
-        results_str__ = ""
-
-        if not os.path.exists(temp_dir):
-            os.makedirs(temp_dir)
-
-        logging.debug("\n\n-----Checking Genes-----\n")
-        input_gene_seq = input_gene_file__.read()
-        logging.debug("From input file: " + input_gene_file__.name)
-
-        for i in range(0, len(genes_list)):
-            if len(input_gene_seq) - seq_len_max_difference <= len(genes_list[i]) \
-               <= len(input_gene_seq) + seq_len_max_difference:
-                memory_gene_seq = genes_list[i]
-                results_str__ = apply_sbm_algorithm(
-                    input_gene_seq, memory_gene_seq.seq, memory_gene_seq.name, results_str_=results_str__
-                )  # genes_dict[genes_list[i]]
-
-                # print("\n" + str(len(genes_list) - i) + " Files remaining...")
-
-                # if len(genes_list) > 0:
-                #     print("\rProcessing " + input_gene_file__.name.split(r"\\")[-1] + ": " +
-                #           str(100 - int(((len(genes_list) - i) / len(genes_list)) * 100)) + "%", end="")
-
-        return results_str__
-
-    def determine_best_match(seq_in_check, temp_list_txt, final_results_str_=""):
-        # Decide which (if any) of the sequences stored in memory is the same one as the given sequence (seq_in_check).
-
-        logging.debug("\n\n-----Determining Best Match-----\n")
-        top_match_gene = "None"
-        gene_dist_equivalents = {}
-        # _temp_list = open_1_file(temp_dir + temp_list_filename, 'r')
-        # temp_list_txt = _temp_list.readlines()
-        lowest_num = 1.0  # For Hamming Distance etc., where the lower the better
-        highest_num = 0.0  # For pairwise2 alignment etc., where the higher the better
-
-        # Find Lowest/Highest Distance
-        # Hamming Distance (Lowest number)
-        if algorithm_type == "Hamming":
-            # print("Hamming")
-            for line in temp_list_txt:
-                if line.__contains__(" "):
-                    num = float(line.split()[2])
-                    if num < lowest_num:
-                        lowest_num = num
-                        top_match_gene = str(line.split('.')[0])
-                        logging.debug("Record broken with " + str(num) + " (" + top_match_gene + ")")
-
-        # Pairwise2 (Highest number)
-        elif algorithm_type == "Pairwise2":
-            # print("Pairwise2")
-            for line in temp_list_txt:
-                if line.__contains__(" "):
-                    if temp_list_format == "Normal":
-                        num = float(line.split()[2])
-                    elif temp_list_format == "PercentageOnly":
-                        num = float(line)
-
-                    if num > highest_num:
-                        highest_num = num
-                        top_match_gene = str(line.split('.')[0])
-                        logging.debug("Record broken with " + str(num) + " (" + top_match_gene + ")")
-
-        # Pairwise2 Score Only (Highest number)
-        elif algorithm_type == "Pairwise2-ScoreOnly":
-            # print("Pairwise2-ScoreOnly")
-            for line in temp_list_txt:
-                if line.__contains__(" "):
-                    if temp_list_format == "Normal":
-                        num = float(line.split()[2])
-                    elif temp_list_format == "PercentageOnly":
-                        num = float(line)
-                    else:
-                        logging.error("List format '" + temp_list_format + "' is not a valid format."
-                                                                           " \nSetting format to 'Normal'")
-                        print("List format '" + temp_list_format + "' is not a valid format."
-                                                                   " \nSetting format to 'Normal'")
-                        num = float(line.split()[2])
-
-                    if num > highest_num:
-                        highest_num = num
-                        top_match_gene = str(line.split('.')[0])
-                        logging.debug("Record broken with " + str(num) + " (" + top_match_gene + ")")
-                    else:
-                        logging.debug("num: " + str(num) + " < highest_num: " + str(highest_num))
-
-        else:
-            print("Else")
-
-        # Check For Equivalents
-        for line in temp_list_txt:
-            if line.__contains__(" "):
-                if temp_list_format == "Normal":
-                    num = float(line.split()[2])
-                elif temp_list_format == "PercentageOnly":
-                    num = float(line)
-
-                gene_name = str(line.split('.')[0])
-
-                if algorithm_type == "Hamming" and num == lowest_num or \
-                        algorithm_type == "Pairwise2" and num == highest_num or \
-                        algorithm_type == "Pairwise2-ScoreOnly" and num == highest_num:
-                    gene_dist_equivalents[gene_name] = num
-
-        # Write Output (Results)
-        if len(gene_dist_equivalents) > 0:
-            final_results_str_ += seq_in_check + " = "
-
-            # for i in equal_dist_genes:
-            final_results_str_ += str(gene_dist_equivalents).removeprefix("{").removesuffix("}").replace("'", "") + "\n"
-            return final_results_str_, gene_dist_equivalents
-
-        else:
-            # final_results_str_ += seq_in_check + " = " + top_match_gene + " (" + str(lowest_num) + ")\n"
-            final_results_str_ += seq_in_check + " = None : 1.0\n"
-            return final_results_str_, [top_match_gene]
-
-    def apply_threshold(threshold=0.7):
-        print("\nApplying Threshold...\n")
-        logging.debug("Applying Threshold...")
-        final_results_above_threshold = list()
-
-        for line in final_results_str.splitlines():
-            match_percentage = float(line.split(':')[-1])
-            if match_percentage >= threshold and line.split()[2] != "None":
-                final_results_above_threshold.append(line)
-
-        results_above_threshold_file = open_1_file(output_dir + "Results.txt", 'w')
-        for i in range(len(final_results_above_threshold)):
-            results_above_threshold_file.write(str(final_results_above_threshold[i]))
-
-    # -----Function Codes End Here-----
-
-    final_results_str = ""
-
-    open_gene_files(memory_dir)
-    current_file = 1
-
-    for paths, dirs, files in os.walk(input_dir):
-        for filename in files:
-            # Open Files
-            temp_list_str = ""
-            # temp_list = open_1_file(temp_dir + temp_list_filename, 'w')
-            # results = open_1_file(output_dir + "Results " + filename + ".txt", 'w')
-
-            logging.debug("Processing " + filename)
-            # start = time.time()
-            input_gene_file_ = open_1_file(input_dir + filename, 'r')
-            results_str = check_gene_in_memory(input_gene_file_)
-            # end = time.time()
-            # print("\nTime: " + str(end - start))
-
-            # Estimate time to finish operation
-            estimated_time = 0
-            if "%.1f" % (current_file / len(files) * 100) == 0.1:
-                start = time.time()
-            elif "%.1f" % (current_file / len(files) * 100) == 0.2:
-                end = time.time()
-                estimated_time = (end - start) * 1000
-                estimated_time = time.gmtime(estimated_time)
-                estimated_time = time.strftime("%H Hours, %M Minutes, %S Seconds", estimated_time)
-
-            if estimated_time == 0:
-                print("\r" + str(len(files) - current_file) + " Files remaining... (" +
-                      str("%.1f" % (current_file / len(files) * 100)) + "%, Currently processing: " +
-                      str(filename) + ")", end="")
-
-            else:
-                print("\r" + str(len(files) - current_file) + " Files remaining... (" +
-                      str("%.1f" % (current_file / len(files) * 100)) + "%, Currently processing: " +
-                      str(filename) + ") Estimated time: " + str(estimated_time), end="")
-
-            logging.debug("results_str before writing = " + results_str)
-            # temp_list.write(results_str)
-            # temp_list.close()
-            temp_list_str += results_str + "\n"
-            # logging.debug("temp_list file includes: " + open(temp_dir + temp_list_filename, 'r').read())
-            results_str = ""
-            logging.debug("Results String has been transported to file")
-
-            final_results_str += determine_best_match(filename, temp_list_str.splitlines())[0]
-            # print("final_results_str = " + final_results_str)
-            close_all_files()
-            logging.debug(filename + " has been successfully processed")
-
-            current_file += 1
-
-    results_file = open_1_file(output_dir + "Results Before Threshold.txt", 'w')
-    results_file.write(final_results_str)
-    apply_threshold(threshold=threshold)
-
-    close_all_files()  # Just in case
-
-
-def open_1_file(path, mode):
-    file = open(path, mode)
-    active_files.append(file)
-    return file
+# def identify_genes(input_dir=r"MainInput\\", output_dir=r"MainOutput\\", temp_dir=r"Memory\\DefaultTemp\\",
+#                    memory_dir=r"Memory\\DefaultTemp\\GeneLib\\", threshold=0.7,
+#                    algorithm_type="Pairwise2-ScoreOnly", seq_len_max_difference=15,
+#                    temp_list_filename="percentages.txt", temp_list_format="Normal"):
+#
+#     genes_list = list()
+#
+#     """
+#     - results_str: Results of matching between sequence in check and every other sequence in
+#     memory. From that string the program decides later which of the matches is the best one and assigns it.
+#     - final_results_str: Best matches list of every sequence inputted.
+#     """
+#
+#     def open_gene_files(dir):
+#         # Open all genes that are stored in memory and prepare them for matching
+#         for paths, dirs, files in os.walk(dir):
+#             for file in files:
+#                 if file.split('.')[1].lower() == "fasta":
+#                     print("Opening file: " + file)
+#                     gene_seq = open(dir + file, 'r')
+#                     genes_list.append(SeqRecord(Seq(gene_seq.read()), name=file))
+#                     # genes_dict[Seq(gene_seq.read())] = file
+#                     gene_seq.close()
+#
+#     def apply_sbm_algorithm(input_gene_seq, memory_gene_seq, memory_gene_name, results_str_=""):
+#         # Match given sequence (input_gene_seq) to a sequence from memory (memory_gene_sequence)
+#         # using a Sequence Based Method.
+#
+#         """
+#         Algorithm Types (algorithm_type):
+#         - Hamming: Hamming Distance
+#         - Pairwise2: Pairwise2 algorithm from Biopython library.
+#         - Pairwise2-ScoreOnly: Pairwise2 algorithm from Biopython library. score_only set to True (shorter runtime).
+#         """
+#
+#         if algorithm_type == "Hamming":
+#             mutations = 0
+#
+#             length = min(len(input_gene_seq), len(memory_gene_seq))
+#
+#             for i in range(0, length):
+#                 char1 = input_gene_seq[i]
+#                 char2 = memory_gene_seq[i]
+#
+#                 if not char2.lower() == char1.lower():
+#                     mutations += 1
+#
+#             hum_dist = mutations / length
+#
+#             # Save Results in Temp Memory
+#             results_str_ += memory_gene_name.split('\\')[-1] + " " + str(mutations) + "/" + str(length) + " " + str(hum_dist) + "\n"
+#
+#         elif algorithm_type == "Pairwise2":
+#             seq1 = Seq(input_gene_seq)
+#             seq2 = Seq(memory_gene_seq)
+#
+#             matches = pairwise2.align.globalxx(seq1, seq2, score_only=False)
+#             logging.debug("Match results for gene " + memory_gene_name + ": " +
+#                           str(matches[0][2] / (matches[0][4] - matches[0][3])))
+#
+#             # Save Results in Temp Memory
+#             if temp_list_format == "Normal":
+#                 results_str_ += memory_gene_name.split('\\')[-1] + " " + str(matches[0][2]) + "/" + \
+#                                 str(matches[0][4] - matches[0][3]) + " " + \
+#                                 str(matches[0][2] / (matches[0][4] - matches[0][3])) + "\n"
+#             elif temp_list_format == "PercentageOnly":
+#                 results_str_ += str(matches[0][2] / (matches[0][4] - matches[0][3])) + "\n"
+#
+#         elif algorithm_type == "Pairwise2-ScoreOnly":
+#             seq1 = Seq(input_gene_seq)
+#             seq2 = Seq(memory_gene_seq)
+#             bigger_seq = max(len(seq1), len(seq2))
+#
+#             # Apply algorithm
+#             matches = pairwise2.align.globalxx(seq1, seq2, score_only=True)
+#             logging.debug("Match results for gene " + memory_gene_name + ": " +
+#                           str(matches / bigger_seq))
+#
+#             # Save Results in Temp Memory
+#             if temp_list_format == "Normal":
+#                 results_str_ += memory_gene_name.split('\\')[-1] + " " + str(matches) + "/" + \
+#                                 str(bigger_seq) + " " + str(matches / bigger_seq) + "\n"
+#             elif temp_list_format == "PercentageOnly":
+#                 results_str_ += str(matches / bigger_seq) + "\n"
+#
+#         return results_str_
+#
+#     def check_gene_in_memory(input_gene_file__):
+#         # Match given gene (input_gene_file__) to all genes stored in memory.
+#
+#         results_str__ = ""
+#
+#         if not os.path.exists(temp_dir):
+#             os.makedirs(temp_dir)
+#
+#         logging.debug("\n\n-----Checking Genes-----\n")
+#         input_gene_seq = input_gene_file__.read()
+#         logging.debug("From input file: " + input_gene_file__.name)
+#
+#         for i in range(0, len(genes_list)):
+#             if len(input_gene_seq) - seq_len_max_difference <= len(genes_list[i]) \
+#                <= len(input_gene_seq) + seq_len_max_difference:
+#                 memory_gene_seq = genes_list[i]
+#                 results_str__ = apply_sbm_algorithm(
+#                     input_gene_seq, memory_gene_seq.seq, memory_gene_seq.name, results_str_=results_str__
+#                 )  # genes_dict[genes_list[i]]
+#
+#                 # print("\n" + str(len(genes_list) - i) + " Files remaining...")
+#
+#                 # if len(genes_list) > 0:
+#                 #     print("\rProcessing " + input_gene_file__.name.split(r"\\")[-1] + ": " +
+#                 #           str(100 - int(((len(genes_list) - i) / len(genes_list)) * 100)) + "%", end="")
+#
+#         return results_str__
+#
+#     def determine_best_match(seq_in_check, temp_list_txt, final_results_str_=""):
+#         # Decide which (if any) of the sequences stored in memory is the same one as the given sequence (seq_in_check).
+#
+#         logging.debug("\n\n-----Determining Best Match-----\n")
+#         top_match_gene = "None"
+#         gene_dist_equivalents = {}
+#         # _temp_list = open_1_file(temp_dir + temp_list_filename, 'r')
+#         # temp_list_txt = _temp_list.readlines()
+#         lowest_num = 1.0  # For Hamming Distance etc., where the lower the better
+#         highest_num = 0.0  # For pairwise2 alignment etc., where the higher the better
+#
+#         # Find Lowest/Highest Distance
+#         # Hamming Distance (Lowest number)
+#         if algorithm_type == "Hamming":
+#             # print("Hamming")
+#             for line in temp_list_txt:
+#                 if line.__contains__(" "):
+#                     num = float(line.split()[2])
+#                     if num < lowest_num:
+#                         lowest_num = num
+#                         top_match_gene = str(line.split('.')[0])
+#                         logging.debug("Record broken with " + str(num) + " (" + top_match_gene + ")")
+#
+#         # Pairwise2 (Highest number)
+#         elif algorithm_type == "Pairwise2":
+#             # print("Pairwise2")
+#             for line in temp_list_txt:
+#                 if line.__contains__(" "):
+#                     if temp_list_format == "Normal":
+#                         num = float(line.split()[2])
+#                     elif temp_list_format == "PercentageOnly":
+#                         num = float(line)
+#
+#                     if num > highest_num:
+#                         highest_num = num
+#                         top_match_gene = str(line.split('.')[0])
+#                         logging.debug("Record broken with " + str(num) + " (" + top_match_gene + ")")
+#
+#         # Pairwise2 Score Only (Highest number)
+#         elif algorithm_type == "Pairwise2-ScoreOnly":
+#             # print("Pairwise2-ScoreOnly")
+#             for line in temp_list_txt:
+#                 if line.__contains__(" "):
+#                     if temp_list_format == "Normal":
+#                         num = float(line.split()[2])
+#                     elif temp_list_format == "PercentageOnly":
+#                         num = float(line)
+#                     else:
+#                         logging.error("List format '" + temp_list_format + "' is not a valid format."
+#                                                                            " \nSetting format to 'Normal'")
+#                         print("List format '" + temp_list_format + "' is not a valid format."
+#                                                                    " \nSetting format to 'Normal'")
+#                         num = float(line.split()[2])
+#
+#                     if num > highest_num:
+#                         highest_num = num
+#                         top_match_gene = str(line.split('.')[0])
+#                         logging.debug("Record broken with " + str(num) + " (" + top_match_gene + ")")
+#                     else:
+#                         logging.debug("num: " + str(num) + " < highest_num: " + str(highest_num))
+#
+#         else:
+#             print("Else")
+#
+#         # Check For Equivalents
+#         for line in temp_list_txt:
+#             if line.__contains__(" "):
+#                 if temp_list_format == "Normal":
+#                     num = float(line.split()[2])
+#                 elif temp_list_format == "PercentageOnly":
+#                     num = float(line)
+#
+#                 gene_name = str(line.split('.')[0])
+#
+#                 if algorithm_type == "Hamming" and num == lowest_num or \
+#                         algorithm_type == "Pairwise2" and num == highest_num or \
+#                         algorithm_type == "Pairwise2-ScoreOnly" and num == highest_num:
+#                     gene_dist_equivalents[gene_name] = num
+#
+#         # Write Output (Results)
+#         if len(gene_dist_equivalents) > 0:
+#             final_results_str_ += seq_in_check + " = "
+#
+#             # for i in equal_dist_genes:
+#             final_results_str_ += str(gene_dist_equivalents).removeprefix("{").removesuffix("}").replace("'", "") + "\n"
+#             return final_results_str_, gene_dist_equivalents
+#
+#         else:
+#             # final_results_str_ += seq_in_check + " = " + top_match_gene + " (" + str(lowest_num) + ")\n"
+#             final_results_str_ += seq_in_check + " = None : 1.0\n"
+#             return final_results_str_, [top_match_gene]
+#
+#     def apply_threshold(threshold=0.7):
+#         print("\nApplying Threshold...\n")
+#         logging.debug("Applying Threshold...")
+#         final_results_above_threshold = list()
+#
+#         for line in final_results_str.splitlines():
+#             match_percentage = float(line.split(':')[-1])
+#             if match_percentage >= threshold and line.split()[2] != "None":
+#                 final_results_above_threshold.append(line)
+#
+#         results_above_threshold_file = open_1_file(output_dir + "Results.txt", 'w')
+#         for i in range(len(final_results_above_threshold)):
+#             results_above_threshold_file.write(str(final_results_above_threshold[i]))
+#
+#     # -----Function Codes End Here-----
+#
+#     final_results_str = ""
+#
+#     open_gene_files(memory_dir)
+#     current_file = 1
+#
+#     for paths, dirs, files in os.walk(input_dir):
+#         for filename in files:
+#             # Open Files
+#             temp_list_str = ""
+#             # temp_list = open_1_file(temp_dir + temp_list_filename, 'w')
+#             # results = open_1_file(output_dir + "Results " + filename + ".txt", 'w')
+#
+#             logging.debug("Processing " + filename)
+#             # start = time.time()
+#             input_gene_file_ = open_1_file(input_dir + filename, 'r')
+#             results_str = check_gene_in_memory(input_gene_file_)
+#             # end = time.time()
+#             # print("\nTime: " + str(end - start))
+#
+#             # Estimate time to finish operation
+#             estimated_time = 0
+#             if "%.1f" % (current_file / len(files) * 100) == 0.1:
+#                 start = time.time()
+#             elif "%.1f" % (current_file / len(files) * 100) == 0.2:
+#                 end = time.time()
+#                 estimated_time = (end - start) * 1000
+#                 estimated_time = time.gmtime(estimated_time)
+#                 estimated_time = time.strftime("%H Hours, %M Minutes, %S Seconds", estimated_time)
+#
+#             if estimated_time == 0:
+#                 print("\r" + str(len(files) - current_file) + " Files remaining... (" +
+#                       str("%.1f" % (current_file / len(files) * 100)) + "%, Currently processing: " +
+#                       str(filename) + ")", end="")
+#
+#             else:
+#                 print("\r" + str(len(files) - current_file) + " Files remaining... (" +
+#                       str("%.1f" % (current_file / len(files) * 100)) + "%, Currently processing: " +
+#                       str(filename) + ") Estimated time: " + str(estimated_time), end="")
+#
+#             logging.debug("results_str before writing = " + results_str)
+#             # temp_list.write(results_str)
+#             # temp_list.close()
+#             temp_list_str += results_str + "\n"
+#             # logging.debug("temp_list file includes: " + open(temp_dir + temp_list_filename, 'r').read())
+#             results_str = ""
+#             logging.debug("Results String has been transported to file")
+#
+#             final_results_str += determine_best_match(filename, temp_list_str.splitlines())[0]
+#             # print("final_results_str = " + final_results_str)
+#             close_all_files()
+#             logging.debug(filename + " has been successfully processed")
+#
+#             current_file += 1
+#
+#     results_file = open_1_file(output_dir + "Results Before Threshold.txt", 'w')
+#     results_file.write(final_results_str)
+#     apply_threshold(threshold=threshold)
+#
+#     close_all_files()  # Just in case
 
 
-def close_all_files():
-    logging.debug("\n\n-----Closing Files-----\n")
-    for file in active_files:
-        file.close()
-        active_files.remove(file)
+# def open_1_file(path, mode):
+#     file = open(path, mode)
+#     active_files.append(file)
+#     return file
+
+
+# def close_all_files():
+#     logging.debug("\n\n-----Closing Files-----\n")
+#     for file in active_files:
+#         file.close()
+#         active_files.remove(file)
 
 
 # "CleanFolder" Definitions
@@ -1188,7 +1189,7 @@ def delete_files(_dir):
     for path, dirs, files in os.walk(_dir):
         for folder in dirs:
             print("Removing Folder " + folder)
-            shutil.rmtree(_dir + folder)
+            rmtree(_dir + folder)
         for file in files:
             print("Removing File " + file)
             os.remove(_dir + file)
@@ -1217,7 +1218,7 @@ def delete_old_logs(log_dir, limit=10):
         print("Deleting old log files\n")
 
 
-def show_and_get_files(file_num, instruction, input_dir_=const_input_dir, acceptable_formats=[]):
+def show_and_get_files(file_num, instruction, input_dir_=const_input_dir, acceptable_formats=()):
     check_acceptable_formats = True
     files_dict = dict()
 
