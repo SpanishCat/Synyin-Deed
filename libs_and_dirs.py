@@ -38,11 +38,7 @@ anlys_inp_dir = r"Analysis Input\\"
 anlys_op_dir = r"Analysis Results\\"
 anlys_memr_dir = r"Memory\\Analysis\\"
 # Memory
-memory_dir = "Memory\\MainProgram\\"
-memr_inp_dir = "Memory\\MainProgram\\Input\\"
-memr_op_dir = "Memory\\MainProgram\\Output\\"
-temp_dir = "Memory\\DefaultTemp\\"
-gene_lib_dir = temp_dir + "GeneLib\\"
+memory_dir = "Memory\\"
 blast_dir = "Memory\\blast\\bin\\"
 # Logs
 log_dir = "log\\"
@@ -75,14 +71,10 @@ if not os.path.exists(anlys_op_dir):
     os.makedirs(anlys_op_dir)
 if not os.path.exists(anlys_memr_dir):
     os.makedirs(anlys_memr_dir)
+
 # Memory
 if not os.path.exists(memory_dir):
     os.makedirs(memory_dir)
-if not os.path.exists(memr_inp_dir):
-    os.makedirs(memr_inp_dir)
-if not os.path.exists(memr_op_dir):
-    os.makedirs(memr_op_dir)
-
 # Logs
 if not os.path.exists(log_dir):
     os.makedirs(log_dir)
